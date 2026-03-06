@@ -9,6 +9,7 @@ function processPayment(amount) {
         throw new Error('Invalid API key format')
     }
 
+    // this is testing for payment processing logic, in real implementation this would involve API calls to payment gateway
     return {
         success: true,
         amount,
