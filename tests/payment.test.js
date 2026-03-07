@@ -1,6 +1,6 @@
 'use strict';
 
-const { calculateFee, processPayment } = require('../src/payments/payment.service');
+const { calculateFee, processPayment, processPaymentWithDiscount } = require('../src/payments/payment.service');
 const { clearDatabase } = require('../src/database/connection');
 
 beforeEach(() => {
@@ -64,5 +64,47 @@ describe('processPayment', () => {
 
   test('throws for zero amount', async () => {
     await expect(processPayment(1, 0)).rejects.toThrow('Invalid payment amount');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// processPaymentWithDiscount
+// Fee must be calculated on the *discounted* amount, not the original.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('processPaymentWithDiscount', () => {
+  test('10% discount on $100 — fee is charged on $90, not $100', async () => {
+    // $100 − 10% = $90 (discountedAmount)
+    // fee on $90 : (90 × 0.029) + 0.30 = 2.61 + 0.30 = $2.91
+    // netAmount  : 90 − 2.91 = $87.09
+    const payment = await processPaymentWithDiscount(1, 100, 10, 'usd', 'Promo deal');
+    expect(payment.amount).toBe(90.00);    // stored as discounted price
+    expect(payment.fee).toBe(2.91);        // fee on $90 — FAILS if fee uses original $100
+    expect(payment.netAmount).toBe(87.09);
+  });
+
+  test('20% discount on $200 — fee is charged on $160, not $200', async () => {
+    // $200 − 20% = $160
+    // fee on $160: (160 × 0.029) + 0.30 = 4.64 + 0.30 = $4.94
+    // netAmount  : 160 − 4.94 = $155.06
+    const payment = await processPaymentWithDiscount(2, 200, 20, 'usd', 'Flash sale');
+    expect(payment.fee).toBe(4.94);        // fee on $160 — FAILS if fee uses original $200
+    expect(payment.netAmount).toBe(155.06);
+  });
+
+  test('0% discount behaves like a normal payment', async () => {
+    const payment = await processPaymentWithDiscount(3, 100, 0, 'usd', 'No discount');
+    expect(payment.amount).toBe(100.00);
+    expect(payment.fee).toBe(3.20);
+    expect(payment.netAmount).toBe(96.80);
+  });
+
+  test('throws when discount is out of range', async () => {
+    await expect(processPaymentWithDiscount(1, 100, 110))
+      .rejects.toThrow('Discount must be between 0 and 100');
+  });
+
+  test('throws for invalid amount', async () => {
+    await expect(processPaymentWithDiscount(1, -50, 10))
+      .rejects.toThrow('Invalid payment amount');
   });
 });

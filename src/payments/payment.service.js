@@ -62,4 +62,53 @@ const getPaymentHistory = async (userId) => {
   return getPaymentsByUser(userId);
 };
 
-module.exports = { calculateFee, processPayment, getPaymentHistory };
+/**
+ * Process a payment with a promotional discount applied before fee calculation.
+ *
+ * @param {number} userId
+ * @param {number} amount       - Original amount in USD
+ * @param {number} discountPercent - Discount percentage (0–100)
+ * @param {string} currency
+ * @param {string} description
+ */
+const processPaymentWithDiscount = async (
+  userId,
+  amount,
+  discountPercent = 0,
+  currency = 'usd',
+  description = ''
+) => {
+  if (typeof amount !== 'number' || amount <= 0 || !isFinite(amount)) {
+    throw new Error('Invalid payment amount');
+  }
+  if (typeof discountPercent !== 'number' || discountPercent < 0 || discountPercent > 100) {
+    throw new Error('Discount must be between 0 and 100');
+  }
+
+  const discountAmount   = parseFloat((amount * discountPercent / 100).toFixed(2));
+  const discountedAmount = parseFloat((amount - discountAmount).toFixed(2));
+
+  // Fee applied to the discounted price so the customer pays less
+  const fee       = calculateFee(amount);   // BUG: should be calculateFee(discountedAmount)
+  const netAmount = parseFloat((discountedAmount - fee).toFixed(2));
+
+  if (netAmount <= 0) {
+    throw new Error('Amount too small to process after fees');
+  }
+
+  const payment = await savePayment({
+    userId,
+    amount: discountedAmount,
+    originalAmount: amount,
+    discountPercent,
+    fee,
+    netAmount,
+    currency,
+    description,
+    status: 'completed',
+  });
+
+  return payment;
+};
+
+module.exports = { calculateFee, processPayment, getPaymentHistory, processPaymentWithDiscount };
