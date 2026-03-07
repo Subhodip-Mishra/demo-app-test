@@ -20,7 +20,7 @@ const calculateFee = (amount) => {
   if (typeof amount !== 'number' || amount <= 0) {
     throw new Error('Amount must be greater than 0');
   }
-  const percentageFee = amount * (PLATFORM_FEE_RATE / 100);
+  const percentageFee = amount * PLATFORM_FEE_RATE;
   return parseFloat((percentageFee + STRIPE_FIXED_FEE).toFixed(2));
 };
 
