@@ -6,9 +6,24 @@ on:
   pull_request:
     branches: [main]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# How the CodebaseAI webhook works
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Tests run and output is captured to test-output.txt via `tee`.
+# 2. If ANY test fails, the "🚨 Notify CodebaseAI" step fires.
+# 3. It builds a JSON payload containing: repo, branch, commit SHA, author,
+#    direct link to this run, and the full test log text.
+# 4. It POSTs to CODEBASE_AI_WEBHOOK_URL (stored as a GitHub secret).
+# 5. Your CodebaseAI backend receives the payload, analyses the failure,
+#    and returns a root-cause + fix report — no one has to read raw logs.
+#
+# To enable: add secret CODEBASE_AI_WEBHOOK_URL in
+#   GitHub → Settings → Secrets and variables → Actions
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
   test:
-    name: Test (Node ${{ matrix.node-version }})
+    name: 🧪 Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -16,25 +31,113 @@ jobs:
         node-version: [18.x, 20.x]
 
     steps:
-      - name: Checkout repository
+      # ── 1. Source ───────────────────────────────────────────────────────────
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js ${{ matrix.node-version }}
+      - name: ⚙️ Set up Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: "npm"
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: npm ci
 
-      - name: Run test suite with coverage
-        run: npm run test:ci
+      # ── 2. Tests ────────────────────────────────────────────────────────────
+      # continue-on-error keeps the job running so the webhook step below can fire.
+      # set -o pipefail ensures a failing `npm` propagates through `tee`.
+      - name: 🧪 Run test suite & capture output
+        id: tests
+        run: |
+          set -o pipefail
+          npm run test:ci 2>&1 | tee test-output.txt
+        continue-on-error: true
 
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+      # ── 3. Artifacts ────────────────────────────────────────────────────────
+      - name: 📤 Upload test log artifact
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-node-${{ matrix.node-version }}-${{ github.sha }}
+          path: test-output.txt
+          retention-days: 7
+
+      - name: 📤 Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-node-${{ matrix.node-version }}
           path: coverage/
           retention-days: 7
+
+      # ── 4. CodebaseAI webhook ───────────────────────────────────────────────
+      # Fires ONLY when at least one test failed.
+      # Sends the full test log + context to your AI backend for analysis.
+      - name: 🚨 Notify CodebaseAI on failure
+        if: steps.tests.outcome == 'failure'
+        env:
+          CODEBASE_AI_WEBHOOK_URL: ${{ secrets.CODEBASE_AI_WEBHOOK_URL }}
+        run: |
+          echo "🔴 Tests failed — building CodebaseAI payload..."
+
+          # Trim logs: keep last 10 000 chars to stay within webhook limits
+          tail -c 10000 test-output.txt > trimmed-logs.txt
+
+          # Build a clean JSON payload (jq handles all escaping / newlines)
+          jq -n \
+            --rawfile logs trimmed-logs.txt \
+            --arg service    "payflow-api" \
+            --arg repo       "${{ github.repository }}" \
+            --arg branch     "${{ github.ref_name }}" \
+            --arg commit     "${{ github.sha }}" \
+            --arg author     "${{ github.actor }}" \
+            --arg node_ver   "${{ matrix.node-version }}" \
+            --arg run_url    "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{
+              event:        "ci_failure",
+              service:      $service,
+              repository:   $repo,
+              branch:       $branch,
+              commit_sha:   $commit,
+              author:       $author,
+              node_version: $node_ver,
+              run_url:      $run_url,
+              logs:         $logs,
+              triggered_at: (now | todate)
+            }' > codebaseai-payload.json
+
+          echo "📡 Sending logs to CodebaseAI..."
+
+          HTTP_STATUS=$(curl -s \
+            -o  codebaseai-response.json \
+            -w  "%{http_code}" \
+            -X  POST "$CODEBASE_AI_WEBHOOK_URL" \
+            -H  "Content-Type: application/json" \
+            -H  "X-CodebaseAI-Event: ci_failure" \
+            -H  "X-GitHub-Repository: ${{ github.repository }}" \
+            -H  "X-GitHub-Run-Id: ${{ github.run_id }}" \
+            --max-time 30 \
+            -d  @codebaseai-payload.json)
+
+          echo "📡 CodebaseAI webhook — HTTP $HTTP_STATUS"
+          echo "--- CodebaseAI response ---"
+          cat codebaseai-response.json 2>/dev/null || echo "(no response body)"
+          echo "---------------------------"
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "✅ CodebaseAI analysis triggered — check your dashboard for the root-cause report."
+          else
+            echo "⚠️  CodebaseAI webhook returned HTTP $HTTP_STATUS (non-blocking — CI still marked failed)."
+          fi
+
+      # ── 5. Hard-fail so GitHub marks the run ❌ ─────────────────────────────
+      - name: ❌ Fail job if tests failed
+        if: steps.tests.outcome == 'failure'
+        run: |
+          echo ""
+          echo "═══════════════════════════════════════════════════════"
+          echo "  CI FAILED — CodebaseAI is analysing the failure."
+          echo "  A root-cause report will appear on your dashboard."
+          echo "═══════════════════════════════════════════════════════"
+          exit 1

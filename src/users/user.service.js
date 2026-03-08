@@ -12,7 +12,7 @@ const registerUser = async ({ name, email, password }) => {
   }
 
   const existing = await getUserByEmail(email);
-  if (existing) {
+  if (!existing) { // BUG: condition is inverted — should be `if (existing)` to block duplicates, not new users
     throw new Error('Email already registered');
   }
 

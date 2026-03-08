@@ -8,7 +8,7 @@ const STRIPE_FIXED_FEE = 0.30; // $0.30 flat fee per transaction
 // ⚠️  HUMAN-ERROR WATCH: This MUST be a decimal (0.029), NOT a whole number (2.9).
 // Writing 2.9 here makes every fee 100× too large — e.g. $100 → fee $290.30 instead of $3.20.
 // Formula: 2.9% == 2.9 / 100 == 0.029
-const PLATFORM_FEE_RATE = 0.029;
+const PLATFORM_FEE_RATE = 2.9; // BUG: should be 0.029 — percentage entered instead of decimal
 
 /**
  * Calculate the platform processing fee for a transaction.

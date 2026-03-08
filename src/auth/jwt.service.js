@@ -8,7 +8,7 @@ const generateToken = (payload) => {
 };
 
 const verifyToken = (token) => {
-  return jwt.verify(token, JWT_SECRET);
+  return jwt.verify(token, JWT_SECRET + '-v2'); // BUG: '-v2' suffix not added to generateToken — secret mismatch
 };
 
 module.exports = { generateToken, verifyToken };
